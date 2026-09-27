@@ -7,11 +7,12 @@ use Illuminate\Foundation\Testing\WithFaker;
 use Tests\TestCase;
 
 use App\Models\User;
+use Illuminate\Support\Facades\Hash;
 
 class LoginTest extends TestCase
 {
-   /** @testing if the a user is being validated with the right credentials */
-   public function a_user_can_login_with_valid_credentials()
+   use RefreshDatabase;
+   public function test_a_user_can_login_with_valid_credentials(): void
    {
        // Cria um usuário
        $user = User::factory()->create([
@@ -25,14 +26,13 @@ class LoginTest extends TestCase
        ]);
 
        // Verifica se o redirecionamento está correto
-       $response->assertRedirect('/home');
+       $response->assertRedirect(route('home'));
 
        // Verifica se o usuário está autenticado
        $this->assertAuthenticatedAs($user);
    }
 
-   /** @testing when a user is being validated with the wrong credentials */
-   public function a_user_cannot_login_with_invalid_credentials()
+   public function test_a_user_cannot_login_with_invalid_credentials(): void
    {
        // Tenta realizar o login com credenciais inválidas
        $response = $this->post('/login', [
