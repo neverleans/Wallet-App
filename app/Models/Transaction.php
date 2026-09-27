@@ -16,8 +16,16 @@ class Transaction extends Model
         'receiver_id', 
         'amount', 
         'status',
+        'idempotency_key',
         'created_at'
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'amount' => 'decimal:2',
+        ];
+    }
 
     public function sender()
     {
