@@ -1,25 +1,33 @@
-FROM php:8.2-fpm
+FROM php:8.3-cli-alpine
 
-# Install necessary PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql
+# Install system dependencies and PHP extensions (bcmath, pdo_mysql, pcntl, redis)
+RUN apk add --no-cache \
+    git \
+    curl \
+    libpng-dev \
+    libxml2-dev \
+    zip \
+    unzip \
+    linux-headers \
+    $PHPIZE_DEPS \
+    && docker-php-ext-install pdo pdo_mysql bcmath pcntl \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apk del $PHPIZE_DEPS
 
-# Set the working directory
-WORKDIR /var/www/html
+# Install Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-EXPOSE 10000
+# Set working directory
+WORKDIR /var/www
 
+# Copy project files
 COPY . .
 
-RUN apt-get update && apt-get install -y nginx
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+# Set permissions for Laravel
+RUN chown -R www-data:www-data /var/www \
+    && chmod -R 775 /var/www/storage /var/www/bootstrap/cache
 
-# Configure Nginx and PHP-FPM
-COPY conf/nginx/nginx-site.conf /etc/nginx/sites-available/default
-RUN echo "listen = 0.0.0.0:9000" >> /usr/local/etc/php-fpm.d/www.conf
+EXPOSE 8000
 
-COPY scripts/00-laravel-deploy.sh /scripts/00-laravel-deploy.sh
-RUN chmod +x /scripts/00-laravel-deploy.sh
-RUN /scripts/00-laravel-deploy.sh
-
-# CMD ["/scripts/00-laravel-deploy.sh", "&&", "/start.sh"]
-CMD ["/bin/sh", "-c", "/scripts/00-laravel-deploy.sh"]
+CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]

@@ -4,12 +4,6 @@ echo "Running composer"
 
 composer install --optimize-autoloader --no-dev --working-dir=/var/www/html || { echo "Composer failed"; exit 1; }
 
-# Verificar se o diretório vendor foi criado
-if [ -d "vendor" ]; then
-    echo "Diretório 'vendor' existe."
-    exit 1
-fi
-
 echo "Caching config..."
 php artisan config:cache
 
