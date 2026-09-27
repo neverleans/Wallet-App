@@ -12,6 +12,8 @@ use App\Http\Controllers\WalletController;
     return $request->user();
 }); */
 
+Route::post('/login', [AuthController::class, 'authenticate'])->name('api.login');
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/home', [HomeController::class, 'show'])->name('home');
 

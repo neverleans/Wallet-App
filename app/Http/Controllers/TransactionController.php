@@ -2,57 +2,51 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Controller;
-
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-
-use App\Models\User;
-use App\Models\Transaction;
+use App\Http\Requests\TransferMoneyRequest;
+use App\Services\TransferMoneyService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Symfony\Component\HttpFoundation\Response;
 
 class TransactionController extends Controller
 {
-    public function send(Request $request)
-    {
-        $data = $request->validate([
-            'recipient_email' => 'required|email',
-            'amount' => 'required|numeric|min:1',
-        ]);
+    /**
+     * Handle the money transfer request.
+     */
+    public function send(
+        TransferMoneyRequest $request,
+        TransferMoneyService $transferService
+    ): JsonResponse|RedirectResponse {
+        $result = $transferService->execute(
+            sender: $request->user(),
+            recipientEmail: $request->recipientEmail(),
+            amount: $request->amount(),
+            idempotencyKey: $request->idempotencyKey()
+        );
 
-        $sender = auth()->user();
-        $receiver = User::where('email', $request->recipient_email)->first();
+        $transaction = $result['transaction'];
+        $isReplay = $result['is_idempotent_replay'];
 
-        if ($sender->wallet->balance < $request->amount) {
-            return redirect()->back()->with('transfer_error', 'Saldo insuficiente, recarregue sua carteira!');
+        if ($request->expectsJson() || $request->is('api/*')) {
+            $statusCode = $isReplay ? Response::HTTP_OK : Response::HTTP_CREATED;
+
+            return response()->json([
+                'message' => $isReplay
+                    ? 'Transação recuperada com sucesso (reprodução idempotente).'
+                    : 'Transferência realizada com sucesso!',
+                'data' => [
+                    'id' => $transaction->id,
+                    'sender_id' => $transaction->sender_id,
+                    'receiver_id' => $transaction->receiver_id,
+                    'amount' => number_format((float) $transaction->amount, 2, '.', ''),
+                    'status' => $transaction->status,
+                    'idempotency_key' => $transaction->idempotency_key,
+                    'created_at' => $transaction->created_at?->toIso8601String(),
+                ],
+                'is_idempotent_replay' => $isReplay,
+            ], $statusCode)->header('Idempotent-Replay', $isReplay ? 'true' : 'false');
         }
 
-        if (!$receiver) { 
-           return redirect()->back()->with('transfer_error', 'Este usuário não existe, tente outro email!');
-        }
-
-        DB::beginTransaction();
-
-        try {
-            // Atualiza o saldo do usuário que enviou o dinheiro
-            $sender->wallet->balance = $sender->wallet->balance - $request->amount;
-            $sender->wallet->save();
-
-            // Atualiza o saldo do usuário que recebeu o dinheiro
-            $receiver->wallet->balance = $receiver->wallet->balance + $request->amount;
-            $receiver->wallet->save();
-
-            Transaction::create([
-                'sender_id' => $sender->id,
-                'receiver_id' => $receiver->id,
-                'amount' => $request->amount,
-                'status' => 'completed'
-            ]);
-
-            DB::commit();
-            return redirect()->back()->with('transfer_success', 'Transferência realizada com sucesso!');
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return redirect()->back()->with('transfer_error', 'Erro na tranferência!');
-        }
+        return redirect()->back()->with('transfer_success', 'Transferência realizada com sucesso!');
     }
 }
