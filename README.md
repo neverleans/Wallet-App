@@ -1,131 +1,146 @@
-# Digital Wallet Core API
+<div align="center">
+
+# 💳 Digital Wallet Core API
+
+**High-Concurrency Financial Ledger & ACID P2P Transfer Engine**
+
+[![PHP 8.3](https://img.shields.io/badge/PHP-8.3-777BB4.svg?style=flat-square&logo=php&logoColor=white)](https://www.php.net/)
+[![Laravel 11](https://img.shields.io/badge/Laravel-11.x-FF2D20.svg?style=flat-square&logo=laravel&logoColor=white)](https://laravel.com/)
+[![MySQL 8.0](https://img.shields.io/badge/Database-MySQL%208.0%20(InnoDB)-4479A1.svg?style=flat-square&logo=mysql&logoColor=white)](https://www.mysql.com/)
+[![Redis 7](https://img.shields.io/badge/Cache%20%26%20Queues-Redis%207-DC382D.svg?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-Orchestrated-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Tests: 100% Passing](https://img.shields.io/badge/Tests-100%25%20Passing-059669.svg?style=flat-square&logo=phpunit&logoColor=white)](https://phpunit.de/)
+[![Fintech Standard](https://img.shields.io/badge/Architecture-ACID%20%2B%20Pessimistic%20Locking-7B2CBF.svg?style=flat-square)](https://github.com/neverleans/Wallet-App)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/PHP-8.3-777BB4?style=for-the-badge&logo=php&logoColor=white" alt="PHP 8.3" />
-  <img src="https://img.shields.io/badge/Laravel-11.x-FF2D20?style=for-the-badge&logo=laravel&logoColor=white" alt="Laravel 11" />
-  <img src="https://img.shields.io/badge/MySQL-8.0-4479A1?style=for-the-badge&logo=mysql&logoColor=white" alt="MySQL 8.0" />
-  <img src="https://img.shields.io/badge/Redis-7-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis 7" />
-  <img src="https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
-  <img src="https://img.shields.io/badge/Tests-100%25%20Passing-success?style=for-the-badge&logo=phpunit&logoColor=white" alt="Tests" />
-  <img src="https://img.shields.io/badge/Standard-Fintech%20ACID-blueviolet?style=for-the-badge" alt="Fintech Standard" />
+  <b>Enterprise-grade financial transfer engine engineered to prevent double-spending, eliminate cross-transfer database deadlocks, guarantee strict HTTP idempotency, and maintain arbitrary-precision balance ledgers under high concurrency.</b>
 </p>
 
----
+[🇧🇷 Leia a Documentação em Português](README_PT.md) • [Architecture & Engineering Solutions](#-architecture--concurrency-engineering) • [Transfer Lifecycle Flow](#-transfer-lifecycle-flow) • [API Catalog](#-api-endpoints-reference) • [Docker Quickstart](#-docker-orchestration--quickstart)
 
-## 📌 Visão Geral da Arquitetura & Problema de Negócio
-
-A **Digital Wallet Core API** é uma engine financeira de alta integridade desenvolvida em **Laravel 11** e **PHP 8.3**, desenhada para processar operações de saldo e transferências peer-to-peer (P2P) entre carteiras digitais.
-
-Em sistemas financeiros, vulnerabilidades de concorrência podem causar danos críticos:
-1. **Condições de Corrida (Race Conditions / Double-Spending):** Duas requisições simultâneas de débito lêem o mesmo saldo anterior à dedução, permitindo saques ou transferências duplicadas que deixam a carteira com saldo negativo.
-2. **Deadlocks em Concorrência Cruzada:** Quando o Usuário A envia dinheiro para o Usuário B ao mesmo tempo em que o Usuário B envia para o Usuário A, bloqueios adquiridos em ordem arbitrária causam travamento mútuo no banco de dados (*deadlock*).
-3. **Retentativas e Falhas de Rede:** Cliques múltiplos pelo cliente ou reenvios automáticos em caso de timeout de rede sem idempotência causam cobranças duplicadas.
-4. **Erros de Ponto Flutuante:** Cálculos com tipos `float` sofrem de imprecisão binária segundo o padrão IEEE 754.
-
-### 🛡️ Soluções de Engenharia Aplicadas
-- **Transações ACID & Bloqueio Pessimista (`lockForUpdate`):** Garantia de isolamento rigoroso durante a leitura e dedução do saldo.
-- **Prevenção Determinística de Deadlocks:** Ordenação ascendente dos identificadores de carteira antes da aquisição dos locks de linha no banco de dados.
-- **Chave de Idempotência (`Idempotency-Key`):** Suporte nativo a chave de idempotência via HTTP Header, impedindo débitos duplicados e retornando respostas salvas (*idempotent replay*).
-- **Aritmética de Precisão Arbitrária (`BCMath`):** Todas as operações matemáticas de débito, crédito e comparação utilizam `bcsub`, `bcadd` e `bccomp` com precisão decimal exata.
-- **Arquitetura em Camadas (Clean Code):** Separação de responsabilidades em Form Requests, Services (`TransferMoneyService`), Custom Exceptions semânticas, Domain Events e Listeners assíncronos via fila (Redis).
+</div>
 
 ---
 
-## 🔄 Fluxo de Transferência com ACID e Idempotência
+## ⚡ Executive Summary & Business Problem
+
+In distributed financial ledger architectures, naive database implementations suffer from catastrophic failure modes under concurrent user loads:
+
+1. **Race Conditions (Double-Spending):** Concurrent debit requests read the same initial balance before decrementing, leading to duplicate payouts and negative balance balances.
+2. **Cross-Concurrency Deadlocks:** When User A transfers money to User B at the exact millisecond User B transfers to User A, arbitrary database row locking locks both rows in opposing order, triggering an immediate database deadlock exception (`1213 Deadlock found when trying to get lock`).
+3. **Network Retries & Duplicate Charges:** Transient client timeouts or repeated clicks without strict idempotency enforcement lead to duplicate debits.
+4. **Binary Floating-Point Drift:** Calculations executed using standard floating-point types (`float`, `double`) introduce fractional precision drift under standard IEEE 754 representation.
+
+---
+
+## 🛡️ Architecture & Concurrency Engineering
+
+The **Digital Wallet Core API** mitigates these failure modes through rigorous engineering patterns:
+
+* **Pessimistic Row Locking (`SELECT ... FOR UPDATE`):** Acquires exclusive row-level database locks on both the sender and receiver wallet records within a dedicated transaction, serializing balance reads and deductions.
+* **Deterministic Deadlock Prevention:** Enforces strict ascending order sorting on Wallet IDs (`min(sender_id, receiver_id)`, `max(sender_id, receiver_id)`) before acquiring row locks. This guarantees all concurrent cross-transfers acquire locks in identical sequential order, rendering deadlocks mathematically impossible.
+* **HTTP Idempotency Key Gateway (`Idempotency-Key`):** Enforces unique request keys via HTTP headers. Duplicate requests with identical parameters return cached, saved responses (`Idempotent-Replay: true`) with zero balance re-debiting. Divergent payloads reusing the same key trigger immediate `409 Conflict` exceptions.
+* **Arbitrary-Precision Arithmetic (`BCMath`):** All ledger credits, debits, and balance comparisons utilize `bcsub`, `bcadd`, and `bccomp` with exact fixed decimal scales, eliminating floating-point rounding errors.
+* **Decoupled Clean Architecture:** Strict layered separation utilizing Form Requests (`TransferMoneyRequest`), Core Services (`TransferMoneyService`), Custom Semantic Domain Exceptions, Domain Events (`TransactionCompletedEvent`), and asynchronous Redis queue workers.
+
+---
+
+## 🔄 Transfer Lifecycle Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Client as Cliente / App
+    actor Client as Client / Mobile App
     participant Controller as TransactionController
     participant Service as TransferMoneyService
     participant Cache as Redis (Atomic Lock)
-    participant DB as Banco de Dados (MySQL)
-    participant Queue as Worker de Fila (Redis)
+    participant DB as MySQL Database (InnoDB)
+    participant Queue as Redis Queue Worker
 
     Client->>Controller: POST /api/transfer (Idempotency-Key: uuid)
     Controller->>Service: execute(sender, recipientEmail, amount, key)
     
     rect rgb(240, 248, 255)
-    Note over Service,Cache: 1. Verificação de Idempotência
-    Service->>DB: Consulta transação existente por Idempotency-Key
-    alt Transação já existe (Replay)
-        DB-->>Service: Registro encontrado
-        Service-->>Controller: Retorna transação original (is_idempotent_replay: true)
+    Note over Service,Cache: 1. Idempotency Check & Atomic Replay
+    Service->>DB: Query transaction by Idempotency-Key
+    alt Transaction Exists (Idempotent Replay)
+        DB-->>Service: Return existing record
+        Service-->>Controller: Return original transaction (is_idempotent_replay: true)
         Controller-->>Client: 200 OK (Header: Idempotent-Replay: true)
     end
     end
 
     rect rgb(255, 250, 240)
-    Note over Service,DB: 2. Bloqueio Pessimista & Isolamento ACID
-    Service->>Cache: Bloqueio atômico de chave de idempotência
-    Service->>DB: Início de DB::transaction()
-    Service->>DB: Ordena Wallet IDs (min, max) para evitar DEADLOCK
-    Service->>DB: SELECT ... FOR UPDATE (Lock das carteiras ordenadas)
-    DB-->>Service: Retorna registros bloqueados com saldo atualizado
+    Note over Service,DB: 2. Pessimistic Locking & ACID Isolation
+    Service->>Cache: Acquire distributed atomic lock on Idempotency-Key
+    Service->>DB: Begin DB::transaction()
+    Service->>DB: Sort Wallet IDs [min, max] (DEADLOCK PREVENTION)
+    Service->>DB: SELECT ... FOR UPDATE (Lock sorted wallet rows)
+    DB-->>Service: Return locked records with guaranteed fresh balance
     
-    alt Saldo Insuficiente
-        Service-->>Controller: Lança InsufficientBalanceException
+    alt Balance Insufficient
+        Service-->>Controller: Throw InsufficientBalanceException
         Controller-->>Client: 422 Unprocessable Entity
     end
 
-    Service->>DB: UPDATE sender wallet (bcsub: decrementa saldo)
-    Service->>DB: UPDATE receiver wallet (bcadd: credita saldo)
+    Service->>DB: UPDATE sender wallet (bcsub: decrement balance)
+    Service->>DB: UPDATE receiver wallet (bcadd: credit balance)
     Service->>DB: INSERT into transactions (amount, status, idempotency_key)
     Service->>DB: DB::commit()
     end
 
     rect rgb(240, 255, 240)
-    Note over Service,Queue: 3. Mensageria Assíncrona
+    Note over Service,Queue: 3. Asynchronous Messaging
     Service->>Queue: Dispatch TransactionCompletedEvent (ShouldQueue)
-    Queue-->>Queue: SendTransactionNotificationListener processa notificação
+    Queue-->>Queue: SendTransactionNotificationListener executes delivery
     end
 
-    Service-->>Controller: Transação executada com sucesso
-    Controller-->>Client: 201 Created (JSON com payload completo)
+    Service-->>Controller: Transfer executed successfully
+    Controller-->>Client: 201 Created (JSON transaction payload)
 ```
 
 ---
 
-## 🏛️ Estrutura Arquitetural do Projeto
+## 🏛️ Project Structure
 
 ```text
 app/
 ├── DTOs/
 ├── Events/
-│   └── TransactionCompletedEvent.php       # Evento de domínio disparado pós-commit
+│   └── TransactionCompletedEvent.php           # Domain event fired post-DB-commit
 ├── Exceptions/
-│   ├── IdempotencyConflictException.php    # HTTP 409 (Idempotência com payload conflitante)
-│   ├── InactiveUserException.php           # HTTP 403 (Usuário inativo)
-│   ├── InsufficientBalanceException.php    # HTTP 422 (Saldo insuficiente)
-│   ├── SelfTransferException.php           # HTTP 422 (Transferência para si mesmo)
-│   └── WalletNotFoundException.php         # HTTP 404 (Carteira inexistente)
+│   ├── IdempotencyConflictException.php        # HTTP 409 (Reused key with altered payload)
+│   ├── InactiveUserException.php               # HTTP 403 (Account suspended/inactive)
+│   ├── InsufficientBalanceException.php        # HTTP 422 (Insufficient funds)
+│   ├── SelfTransferException.php               # HTTP 422 (Origin equals destination)
+│   └── WalletNotFoundException.php             # HTTP 404 (Unregistered recipient wallet)
 ├── Http/
 │   ├── Controllers/
-│   │   ├── Auth/AuthController.php         # Login Web e API (Sanctum Tokens)
-│   │   ├── TransactionController.php       # Controller enxuto para transferências
-│   │   └── WalletController.php            # Recarga atômica de saldo
+│   │   ├── Auth/AuthController.php             # Sanctum token authentication
+│   │   ├── TransactionController.php           # Lean transfer endpoint controller
+│   │   └── WalletController.php                # Atomic wallet balance recharge
 │   └── Requests/
-│       └── TransferMoneyRequest.php        # Validação estrita e extração de headers
+│       └── TransferMoneyRequest.php            # Strict schema validation & header extraction
 ├── Listeners/
-│   └── SendTransactionNotificationListener.php # Worker assíncrono enfileirado
+│   └── SendTransactionNotificationListener.php # Asynchronous queued email/push worker
 ├── Models/
-│   ├── Transaction.php                     # Model de transação com chave única
-│   ├── User.php                            # Usuário com flag is_active e carteira
-│   └── Wallet.php                          # Carteira com casts decimais
+│   ├── Transaction.php                         # Transaction model with unique constraint
+│   ├── User.php                                # User entity with wallet relationship
+│   └── Wallet.php                              # Balance model with decimal casts
 └── Services/
-    └── TransferMoneyService.php            # Core Engine: ACID, Locks e Idempotência
+    └── TransferMoneyService.php                # Core Engine: ACID, Locks, Deadlock Guard & BCMath
 ```
 
 ---
 
-## 📡 Endpoints da API
+## 📡 API Endpoints Reference
 
-### 1. Autenticação (Obtenção de Token Sanctum)
-- **Rota:** `POST /api/login`
-- **Headers:** `Accept: application/json`, `Content-Type: application/json`
+### 1. Authentication
+* **Endpoint:** `POST /api/login`
+* **Headers:** `Accept: application/json`, `Content-Type: application/json`
 
-**Payload de Requisição:**
+**Request Payload:**
 ```json
 {
   "email": "lucas@example.com",
@@ -133,10 +148,10 @@ app/
 }
 ```
 
-**Resposta de Sucesso (`200 OK`):**
+**Success Response (`200 OK`):**
 ```json
 {
-  "message": "Login realizado com sucesso!",
+  "message": "Login successful!",
   "token": "1|nO1K...sample_token",
   "user": {
     "id": 1,
@@ -148,26 +163,26 @@ app/
 
 ---
 
-### 2. Transferência Financeira (P2P Transfer)
-- **Rota:** `POST /api/transfer`
-- **Headers:**
-  - `Authorization: Bearer <SEU_TOKEN>`
-  - `Accept: application/json`
-  - `Content-Type: application/json`
-  - `Idempotency-Key: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d` *(Obrigatório para idempotência)*
+### 2. P2P Financial Transfer
+* **Endpoint:** `POST /api/transfer`
+* **Headers:**
+  * `Authorization: Bearer <TOKEN>`
+  * `Accept: application/json`
+  * `Content-Type: application/json`
+  * `Idempotency-Key: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d` *(UUID v4)*
 
-**Payload de Requisição:**
+**Request Payload:**
 ```json
 {
-  "recipient_email": "destino@example.com",
+  "recipient_email": "destination@example.com",
   "amount": 250.00
 }
 ```
 
-**Resposta de Sucesso (`201 Created`):**
+**First Execution (`201 Created`):**
 ```json
 {
-  "message": "Transferência realizada com sucesso!",
+  "message": "Transfer completed successfully!",
   "data": {
     "id": 42,
     "sender_id": 1,
@@ -181,10 +196,10 @@ app/
 }
 ```
 
-**Resposta de Reprodução Idempotente (`200 OK` com Header `Idempotent-Replay: true`):**
+**Idempotent Replay (`200 OK` with `Idempotent-Replay: true` header):**
 ```json
 {
-  "message": "Transação recuperada com sucesso (reprodução idempotente).",
+  "message": "Transaction retrieved successfully (idempotent replay).",
   "data": {
     "id": 42,
     "sender_id": 1,
@@ -198,132 +213,92 @@ app/
 }
 ```
 
-**Respostas de Erro Semânticas:**
-- `422 Unprocessable Entity` (Saldo insuficiente):
-  ```json
-  {
-    "error": "INSUFFICIENT_BALANCE",
-    "message": "Saldo insuficiente, recarregue sua carteira!"
-  }
-  ```
-- `422 Unprocessable Entity` (Auto-transferência):
-  ```json
-  {
-    "error": "SELF_TRANSFER_NOT_ALLOWED",
-    "message": "Não é permitido realizar transferências para a própria conta."
-  }
-  ```
-- `403 Forbidden` (Conta inativa):
-  ```json
-  {
-    "error": "INACTIVE_USER",
-    "message": "Sua conta está inativa. Operação não autorizada."
-  }
-  ```
-- `409 Conflict` (Chave reutilizada com payload divergente):
-  ```json
-  {
-    "error": "IDEMPOTENCY_CONFLICT",
-    "message": "Chave de idempotência reutilizada com parâmetros divergentes."
-  }
-  ```
+**Semantic Error Handling:**
+* `422 Unprocessable Entity` — Insufficient funds (`INSUFFICIENT_BALANCE`)
+* `422 Unprocessable Entity` — Self-transfer blocked (`SELF_TRANSFER_NOT_ALLOWED`)
+* `403 Forbidden` — Inactive user account (`INACTIVE_USER`)
+* `409 Conflict` — Idempotency key reused with altered payload (`IDEMPOTENCY_CONFLICT`)
 
 ---
 
-### 3. Recarga de Carteira
-- **Rota:** `POST /api/wallet`
-- **Headers:** `Authorization: Bearer <SEU_TOKEN>`, `Accept: application/json`
+### 3. Atomic Balance Deposit
+* **Endpoint:** `POST /api/wallet`
+* **Headers:** `Authorization: Bearer <TOKEN>`, `Accept: application/json`
 
-**Payload de Requisição:**
+**Request Payload:**
 ```json
 {
   "amount": 500.00
 }
 ```
 
-**Resposta de Sucesso (`200 OK`):**
-```json
-{
-  "message": "Carteira recarregada com sucesso!",
-  "data": {
-    "wallet_id": 1,
-    "user_id": 1,
-    "balance": "500.00",
-    "updated_at": "2026-09-27T15:46:10.000000Z"
-  }
-}
+---
+
+## 🐳 Docker Orchestration & Quickstart
+
+The project includes an automated, isolated Docker environment:
+* **App:** PHP 8.3 CLI with `bcmath`, `pdo_mysql`, `pcntl`, and PECL `redis` extensions.
+* **Queue Worker:** Background process listening on Redis queues.
+* **MySQL 8.0:** ACID InnoDB relational storage with persistent volume and healthchecks.
+* **Redis 7:** In-memory distributed lock manager, cache, and message broker.
+
+### Quick Start
+```bash
+git clone https://github.com/neverleans/Wallet-App.git
+cd Wallet-App
+chmod +x setup.sh
+./setup.sh
+# or via Makefile:
+make setup
 ```
 
----
+### Makefile Reference
 
-## 🐳 Execução Local com Docker
-
-A aplicação conta com um ambiente pronto e orquestrado via `docker-compose.yml`, englobando:
-- **App:** PHP 8.3 CLI com extensões `bcmath`, `pdo_mysql`, `pcntl` e extensão PECL `redis`.
-- **Queue Worker:** Worker em segundo plano processando a fila de notificações no Redis.
-- **MySQL 8.0:** Banco de dados relacional com volume persistente e checagem de saúde.
-- **Redis 7:** Armazenamento em memória para locks de concorrência, cache e filas.
-
-### Passo a Passo
-
-1. **Clonar o Repositório:**
-   ```bash
-   git clone https://github.com/neverleans/Wallet-App.git
-   cd Wallet-App
-   ```
-
-2. **Inicializar o Ambiente (Comando Único):**
-   Execute o script automatizado:
-   ```bash
-   chmod +x setup.sh
-   ./setup.sh
-   ```
-   *Ou utilizando o `Makefile`:*
-   ```bash
-   make setup
-   ```
-
-3. **Comandos Úteis do `Makefile`:**
-   | Comando | Descrição |
-   |---|---|
-   | `make up` | Inicia todos os containers em background |
-   | `make down` | Para e remove os containers |
-   | `make logs` | Visualiza os logs em tempo real da aplicação web |
-   | `make queue-logs` | Visualiza os logs do processamento assíncrono de notificações |
-   | `make migrate` | Executa as migrações no banco MySQL |
-   | `make fresh-migrate`| Reseta o banco de dados e executa seeds |
-   | `make test` | Executa a suíte de testes automatizados dentro do container |
-   | `make shell` | Abre o terminal interativo no container da aplicação |
+| Command | Action |
+|---|---|
+| `make up` | Start all Docker containers in background |
+| `make down` | Stop and remove running containers |
+| `make logs` | Stream real-time web application logs |
+| `make queue-logs` | Stream asynchronous notification worker logs |
+| `make migrate` | Run database migrations |
+| `make fresh-migrate` | Reset database and run seeders |
+| `make test` | Execute automated test suite inside container |
+| `make shell` | Open interactive shell inside application container |
 
 ---
 
-## 🧪 Testes Automatizados
+## 🧪 Automated Testing Suite
 
-A suíte de testes cobre integralmente os requisitos de consistência, concorrência e integridade financeira:
+The test suite exercises all mission-critical concurrency and balance ledger invariants:
 
-1. **Transferência Bem-Sucedida:** Valida a integridade dos saldos de ambos os lados e o registro em banco.
-2. **Saldo Insuficiente:** Impede saques a descoberto e garante que nenhuma transação seja gravada.
-3. **Bloqueio de Auto-Transferência:** Impede que o usuário envie fundos para sua própria conta.
-4. **Rollback Atômico em Exceções:** Força falha catastrófica no meio da execução para comprovar que nenhuma alteração de saldo é commitada no banco.
-5. **Garantia de Idempotência:** Dispara requisições com a mesma chave e valida que os saldos não sofrem dedução dupla.
-6. **Conflito de Idempotência:** Rejeita requisições que alteram parâmetros usando uma chave já utilizada.
-7. **Validações de Usuário Inativo:** Impede remetente ou destinatário desativados de operarem.
-8. **Validação de Limites de Valor:** Bloqueia valores negativos, zerados ou formatos inválidos.
-9. **Disparo de Evento & Fila:** Valida que `TransactionCompletedEvent` e o listener `SendTransactionNotificationListener` são enfileirados corretamente.
-10. **Recarga Atômica de Carteira:** Valida recarga concorrente e bloqueios de atualização.
+1. **Successful P2P Transfer:** Validates exact balance deductions, credits, and ledger entry.
+2. **Overdraft Prevention:** Verifies zero-balance transfer attempts fail without database mutations.
+3. **Self-Transfer Prohibition:** Rejects self-transfers before database transaction initialization.
+4. **Catastrophic Failure Rollback:** Injects forced runtime exceptions midway through execution to prove atomic rollback across all tables.
+5. **Idempotency Guarantee:** Dispatches concurrent requests with identical keys, confirming exact single-debit execution.
+6. **Payload Tampering Detection:** Confirms key collisions with divergent payloads trigger `409 Conflict`.
+7. **Account Suspension Guards:** Ensures inactive senders or receivers cannot participate in transactions.
+8. **Boundary Numerical Limits:** Rejects zero, negative, and invalid fractional values.
+9. **Event Queue Verification:** Asserts `TransactionCompletedEvent` dispatches to Redis queues.
+10. **Atomic Wallet Recharge:** Tests concurrent deposits under pessimistic locking.
 
-Para rodar todos os testes localmente:
 ```bash
+# Run tests locally
 php artisan test
-```
 
-Para rodar via Docker:
-```bash
+# Run tests via Docker
 make test
 ```
 
 ---
 
-## 📄 Licença
+## 📜 License
 
-Este projeto está sob a licença [MIT](LICENSE).
+Distributed under the **MIT License**. See `LICENSE` for details.
+
+---
+
+<div align="center">
+  <b>Engineered with precision by Lucas Ventavele Ribeiro</b><br>
+  <a href="https://linkedin.com/in/lucas-ventavele-ribeiro">LinkedIn</a> • <a href="https://neverleans.github.io">Personal Portfolio</a> • <a href="https://github.com/neverleans">GitHub</a>
+</div>
